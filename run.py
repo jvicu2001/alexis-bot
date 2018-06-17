@@ -1,6 +1,17 @@
-from alexis import Alexis
+import asyncio
+import discord
+
+from bot.bot import AlexisBot
+
 
 if __name__ == '__main__':
-    ale = Alexis()
-    ale.init()
-    ale.http_session.close()
+    ale = None
+
+    try:
+        ale = AlexisBot()
+        ale.init()
+    except discord.errors.LoginFailure:
+        if ale is not None:
+            ale.close()
+    except asyncio.CancelledError:
+        pass

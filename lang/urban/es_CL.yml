@@ -1,0 +1,8 @@
+urban-help: Muestra una definición de Urban Dictionary
+urban-format: '$CMD [término]'
+urban-error-fetch: No se pudo cargar la información desde Urban Dictionary.
+urban-cont-by: por
+urban-cont-definition: '**Definición**'
+urban-cont-example: '**Ejemplo**'
+urban-cont-tags: '**Etiquetas**'
+urban-default-word: weon

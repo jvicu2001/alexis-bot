@@ -2,9 +2,10 @@ import discord
 
 from discord import Embed
 
-from bot.libs.configuration import ServerConfiguration
+from bot.guild_configuration import GuildConfiguration
 from bot.libs.language import SingleLanguage
-from bot.utils import is_owner, pat_channel, pat_usertag, pat_snowflake, get_prefix, no_tags
+from bot.utils import no_tags, auto_int
+from bot.regex import pat_usertag, pat_channel, pat_snowflake
 
 
 class MessageEvent:
@@ -17,36 +18,22 @@ class MessageEvent:
         self.channel = message.channel
         self.author = message.author
         self.author_name = message.author.display_name
-        self.is_pm = message.server is None
+        self.is_pm = isinstance(message.channel, discord.DMChannel)
         self.self = message.author.id == bot.user.id
         self.text = message.content
         self.bot_owner = message.author.id in bot.config['bot_owners']
-        self.owner = is_owner(bot, message.author, message.server)
-        self.prefix = MessageEvent.get_prefix(message, bot)
 
-        self.server = None
-        self.server_member = None
-        self.config = None
-
-        if not self.is_pm:
-            self.server = message.server
-            self.server_member = message.server.get_member(self.bot.user.id)
-            self.config = ServerConfiguration(self.bot.sv_config, message.server.id)
-
-            lang_code = self.bot.sv_config.get(self.server.id, 'lang', self.bot.config['default_lang'])
-            self.lang = SingleLanguage(self.bot.lang, lang_code)
-        else:
-            self.lang = SingleLanguage(self.bot.lang, bot.config['default_lang'])
+        self.guild = None if self.is_pm else message.guild
+        self.config = GuildConfiguration.get_instance(self.guild)
+        self._lang = None
 
     async def answer(self, content='', to_author=False, withname=True, **kwargs):
         """
-        Envía un mensaje al canal desde donde se originó el mensaje
-        :param content: El contenido del mensaje. Si es una instancia de discord.Embed, se convierte en un Embed
-        :param to_author: Si se define como True, se envía directamente a quien envió el mensaje, en vez del canal desde
-        donde se envió.
-        :param withname: Establece si se agrega el nombre del usuario a quien se le responde al principio del mensaje en
-        el formato "<display_name>, ...". Si el mensaje no lleva contenido, no se agrega la coma, ni un punto.
-        :param kwargs: Parámetros adicionales a pasar a la función send_message de discord.Client
+        Sends a message where the event was created
+        :param content: The message content. If it's a discord.Embed, then it's used as the embed parameter.
+        :param to_author: If set to True, it's will be sent to the author instead of the event's channel.
+        :param withname: Sets if the message will contain the author's name as prefix.
+        :param kwargs: Additional parameters to pass to send_message method.
         """
         if isinstance(content, Embed):
             kwargs['embed'] = content
@@ -55,8 +42,7 @@ class MessageEvent:
         if 'locales' not in kwargs:
             kwargs['locales'] = {}
 
-        kwargs['locales']['$AU'] = self.author_name
-        kwargs['locales']['$PX'] = self.prefix
+        kwargs['event'] = self
 
         if withname:
             if content != '':
@@ -66,10 +52,10 @@ class MessageEvent:
         dest = self.message.author if to_author else self.message.channel
         return await self.bot.send_message(dest, content, **kwargs)
 
-    async def answer_embed(self, msg, title=None, *, delete_trigger=False, withname=True):
+    async def answer_embed(self, msg, title=None, *, delete_trigger=False, withname=True, **kwargs):
         if delete_trigger:
             try:
-                await self.bot.delete_message(self.message)
+                await self.bot.delete_message(self.message, silent=True)
             except discord.Forbidden:
                 pass
 
@@ -79,89 +65,89 @@ class MessageEvent:
                 msg.title = title
 
         if withname:
-            msg.set_footer(text='para ' + self.author_name)
+            msg.set_footer(text=self.lang.format('$[answer-for]', locales={'author': self.author_name}))
 
-        await self.answer(embed=msg, withname=False)
+        await self.answer(embed=msg, withname=False, **kwargs)
 
     async def typing(self):
         """
-        Envía el estado "Escribiendo..." al canal desde el cual se recibió el mensaje.
+        Shortcut method. Sends the "typing..." status to the event's channel.
         """
-        await self.bot.send_typing(self.message.channel)
+        await self.channel.trigger_typing()
 
     def member_by_id(self, user_id):
         """
-        (Sólo para mensajes en guild) Entrega un miembro del servidor, según el ID de usuario
-        :param user_id: El ID del usuario a buscar.
-        :return: El discord.Member del servidor. Si no se encontró, retorna None
+        (Only for guild messages) Returns the guild member, given an user ID
+        :param user_id: The user's ID to lookup.
+        :return: The guild's discord.Member. Returns None if it was not found.
         """
         if self.is_pm:
             return None
 
-        for member in self.message.server.members:
+        for member in self.message.guild.members:
             if member.id == user_id:
                 return member
 
         return None
 
-    def is_owner(self, user):
-        return is_owner(self.bot, user, self.message.server)
-
     def no_tags(self, users=True, channels=True, emojis=True):
         return no_tags(self.message, self.bot, users, channels, emojis)
 
-    async def get_user(self, user, member_only=False):
+    def get_member(self, named_or_id):
         """
-        Obtiene un usuario según su nombre, una mención, su ID o su nombre con discriminador de Discord.
-        :param user:
-        :param member_only:
-        :return:
+        Fetch a user given a name, @name, <@user_id> mention, user#discriminator, or it's user [@]ID.
+        :param named_or_id: The user referecence string.
+        :return: A discord.Member instance or None.
         """
+        # There are no members on a private channel
         if self.is_pm:
-            raise RuntimeError('Esta función no funciona desde PMs')
+            raise RuntimeError('You can\'t get users information on PMs')
 
-        if isinstance(user, discord.Member) or isinstance(user, discord.User):
-            return user
+        # If somehow a member object is passed, return it
+        if isinstance(named_or_id, discord.Member):
+            return named_or_id
 
-        if user.startswith("@"):
-            user = user[1:]
+        # Try to convert a tag into an ID, if not, it's probably a user name or nick
+        named_or_id = auto_int(str(named_or_id).lstrip('@'))
+        if not isinstance(named_or_id, int):
+            u_match = pat_usertag.match(named_or_id)
+            if u_match:
+                named_or_id = auto_int(u_match.group(1))
 
-        u = self.message.server.get_member_named(user)
-        if u is not None:
-            return u
+        # Use the methods according to the variable type
+        if isinstance(named_or_id, int):
+            return self.guild.get_member(named_or_id)
+        else:
+            return self.guild.get_member_named(named_or_id)
 
-        if pat_usertag.match(user):
-            st = 3 if user[2] == '!' else 2
-            user = user[st:-1]
-
-        u = self.message.server.get_member(user)
-        if u is not None:
-            return u
-
-        if member_only or not pat_snowflake.match(user):
-            return None
-
-        return await self.bot.get_user_info(user)
+    def get_member_or_author(self, named_or_id=None):
+        """
+        This is a shortcut for when a command is user via DM and want to return the author instead
+        of a member, because there are no members over PMs.
+        :param named_or_id: The user referecence string.
+        :return: The message author if it's a PM (parameter is ignored), or a discord.Member instance or None.
+        """
+        return self.author if self.is_pm else self.get_member(named_or_id)
 
     def find_channel(self, channel):
         """
-        Encuentra un canal según su nombre, #nombre, mención o ID, para un mensaje desde una guild.
-        :param channel: El nombre, #nombre, mención o ID del canal a buscar
-        :return: El discord.Channel. Si no se encontró, se devuelve None.
+        Looks up for a channel given it's name, #name, channel tag or ID, for an event originated from a guild.
+        :param channel: The channel reference string
+        :return: The discord.Channel. If not found, None is returned.
         """
         if self.is_pm:
             return None
 
-        sv = self.message.server
+        guild = self.message.guild
         if pat_snowflake.match(channel):
-            return sv.get_channel(channel)
+            return guild.get_channel(channel)
         elif pat_channel.match(channel):
-            return sv.get_channel(channel[2:-1])
+            return guild.get_channel(channel[2:-1])
         else:
             if channel.startswith('#'):
                 channel = channel[1:]
 
-            for chan in sv.channels:
+            for chan in guild.channels:
                 if chan.name == channel:
                     return chan
 
@@ -170,10 +156,35 @@ class MessageEvent:
     def lng(self, name, **kwargs):
         return self.lang.get(name, **kwargs)
 
+    def is_owner(self, member: discord.Member):
+        return not self.is_pm and self.bot.is_guild_owner(member)
+
+    @property
+    def prefix(self):
+        return self.bot.get_prefix(self.message.channel)
+
+    @property
+    def owner(self):
+        return self.is_owner(self.author)
+
+    @property
+    def permissions(self):
+        if self.guild is None:
+            return None
+        return self.guild.me.permissions_in(self.channel)
+
+    @property
+    def lang(self):
+        if self._lang is None:
+            if self.guild is None:
+                self._lang = SingleLanguage(self.bot.lang, self.bot.config['default_lang'])
+            else:
+                conf = GuildConfiguration.get_instance(self.guild)
+                lang_code = conf.get('lang', self.bot.config['default_lang'])
+                self._lang = SingleLanguage(self.bot.lang, lang_code)
+
+        return self._lang
+
     def __str__(self):
         return '[{}  channel="{}#{}" author="{}" text="{}"]'.format(
-            self.__class__.__name__, self.message.server, self.message.channel, self.message.author, self.text)
-
-    @staticmethod
-    def get_prefix(message, bot):
-        return get_prefix(bot, None if message.server is None else message.server.id)
+            self.__class__.__name__, self.message.guild, self.message.channel, self.message.author, self.text)

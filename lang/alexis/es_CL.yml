@@ -1,15 +1,31 @@
-user-not-found: "usuario no encontrado"
-lang-not-available: "idioma no disponible"
-current-lang: "idioma actual: **{lang}**"
-lang-set-to: "idioma definido como **{lang}**"
-format: "formato"
-missing-help: "(el que hizo la weaita no le puso texto de ayuda jij)"
-disallowed-via-pm: "este comando no se puede usar via PM"
-yes: "si"
-no: "no"
-name: "Nombre"
-start-date: "Fecha de inicio"
-end-date: "Fecha de término"
-data-not-available: "datos no disponibles"
-channel-not-found: "canal no encontrado"
-channel-saved: "canal guardado"
+user-not-found: Usuario no encontrado
+format: Formato
+disallowed-via-pm: Este comando no se puede usar via PM
+command-not-authorized: No puedes utilizar este comando
+'yes': si
+'no': 'no'
+name: Nombre
+start-date: Fecha de inicio
+end-date: Fecha de término
+data-not-available: datos no disponibles
+channel-not-found: Canal no encontrado.
+channel-saved: Canal guardado.
+answer-for: 'Para {author}'
+command-not-available: Comando no disponible.
+day: día
+days: días
+hour: hora
+hours: horas
+minute: minuto
+minutes: minutos
+second: segundo
+seconds: segundos
+now: ahora
+error: 'Error: {errortext}'
+command-delayed: Aún no puedes usar este comando.
+nsfw-only: Este comando sólo puede ser utilizado en un canal NSFW.
+error-debug: ALGO PASÓ OwO
+error-msg: 'Ocurrió un error al ejecutar el comando'
+invite-text: 'Puedes agregarme a tu servidor mediante el siguiente enlace:'
+invite-filtered: '[invite eliminado]'
+usage: Formato

@@ -1,174 +1,282 @@
 import asyncio
 import platform
 import sys
+from datetime import datetime
+
 import discord
 
-from bot import Language, StaticConfig, Configuration, Manager
-from bot import defaults, init_db, log
-from bot.utils import destination_repr, get_bot_root, replace_everywhere
+from bot import Language, Manager
+from bot.guild_configuration import GuildConfiguration
+from bot.database import BotDatabase
+from bot.libs.configuration import BotConfiguration
+from bot.logger import new_logger
+from bot.utils import auto_int
+
+log = new_logger('Core')
 
 
-class AlexisBot(discord.Client):
-    __author__ = 'ibk (github.com/santisteban), makzk (github.com/jkcgs)'
+class AlexisBot(discord.AutoShardedClient):
+    __author__ = 'makzk (github.com/makzk)'
     __license__ = 'MIT'
-    __version__ = '1.0.0-dev.57'
+    __version__ = '1.0.0-dev4'
     name = 'AlexisBot'
 
     def __init__(self, **options):
         """
-        Inicializa la configuración, el log, una sesión aiohttp y atributos de la clase.
-        :param options: Las opciones correspondientes de discord.Client
+        Initializes configuration, logging, an aiohttp session and class attributes.
+        :param options: The discord.Client options
         """
         super().__init__(**options)
 
         self.db = None
-        self.sv_config = None
         self.last_author = None
         self.initialized = False
+        self.start_time = datetime.now()
+        self.connect_delta = None
 
         self.lang = {}
         self.deleted_messages = []
+        self.deleted_messages_nolog = []
 
         self.manager = Manager(self)
-        self.config = StaticConfig()
+        self.config = None
+        self.loop = asyncio.get_event_loop()
 
     def init(self):
         """
-        Carga la configuración, se conecta a la base de datos, y luego se conecta con Discord.
-        :return:
+        Loads configuration, connects to database, and then connects to Discord.
         """
         log.info('%s v%s, discord.py v%s', AlexisBot.name, AlexisBot.__version__, discord.__version__)
-        log.info('Python %s en %s.', sys.version.replace('\n', ''), sys.platform)
-        log.info('Bot root path: %s', get_bot_root())
+        log.info('Python %s in %s.', sys.version.replace('\n', ''), sys.platform)
+        log.info('Bot root path: %s', self.manager.get_bot_root())
         log.info(platform.uname())
         log.info('------')
 
-        # Cargar configuración
+        # Load configuration
         self.load_config()
         if self.config.get('token', '') == '':
-            raise RuntimeError('No se ha definido el tóken de Discord. Debe estar en e')
+            raise RuntimeError('Discord bot token not defined. It should be in config.yml file.')
 
-        # Cargar base de datos
-        log.info('Conectando con la base de datos...')
-        self.connect_db()
-        self.sv_config = Configuration()
+        # Load database
+        log.info('Connecting to the database...')
+        self.db = BotDatabase.initialize()
+        log.info('Successfully conected to database using %s', self.db.__class__.__name__)
 
-        # Cargar instancias de las clases de comandos cargadas en bots.modules
-        log.info('Cargando comandos...')
+        # Load command classes and instances from bots.modules
+        log.info('Loading commands...')
         self.manager.load_instances()
         self.manager.dispatch_sync('on_loaded', force=True)
 
-        # Conectar con Discord
+        # Connect to Discord
         try:
-            log.info('Conectando...')
-            self.run(self.config['token'])
+            self.start_time = datetime.now()
+            log.info('Connecting to Discord...')
+            self.loop.run_until_complete(self.start(self.config['token']))
         except discord.errors.LoginFailure:
-            log.error('El token de Discord es incorrecto!')
+            log.error('Invalid Discord token!')
             raise
-        except Exception as ex:
-            log.exception(ex)
-            raise
-
-    async def on_ready(self):
-        """Esto se ejecuta cuando el bot está conectado y listo"""
-
-        log.info('Conectado como "%s", ID %s', self.user.name, self.user.id)
-        log.info('------')
-        await self.change_presence(game=discord.Game(name=self.config['playing']))
-
-        self.initialized = True
-        await self.manager.dispatch('on_ready')
-
-    async def send_message(self, destination, content=None, *, tts=False, embed=None, locales=None, event=None):
-        """
-        Sobrecarga la llamada original de discord.Client para enviar mensajes para accionar otras llamadas
-        como handlers de modificación de mensajes y registros del bot. Soporta los mismos parámetros del
-        método original.
-        :param destination: Dónde enviar un mensaje, como discord.Channel, discord.User, discord.Object, entre otros.
-        :param content: El contenido textual a enviar
-        :param tts: El mensaje es TTS (text to speech).
-        :param embed: Enviar un embed con el mensaje.
-        :param locales: Mensajes a reemplazar en el contenido y embed.
-        :param event: El evento que origina el mensaje. Se usa para entregárselo a los respectivos handlers.
-        :return:
-        """
-
-        # Call pre_send_message handlers, append destination
-        if locales is None:
-            locales = {}
-
-        kwargs = {'destination': destination, 'content': content, 'tts': tts,
-                  'embed': embed, 'locales': locales, 'event': event}
-        self.manager.dispatch_ref('pre_send_message', kwargs)
-
-        # Handle locales
-        if kwargs['locales'] is not None:
-            kwargs['content'] = replace_everywhere(kwargs['content'], kwargs['locales'])
-            if kwargs['embed'] is not None:
-                kwargs['embed'] = replace_everywhere(kwargs['embed'], kwargs['locales'])
-
-        # Log the message
-        dest = destination_repr(kwargs['destination'])
-        msg = 'Sending message "{}" to {} '.format(content, dest)
-        if isinstance(embed, discord.Embed):
-            msg += ' (with embed: {})'.format(embed.to_dict())
-        log.debug(msg)
-
-        # Send the actual message
-        del kwargs['locales'], kwargs['event']
-        return await super(AlexisBot, self).send_message(**kwargs)
-
-    async def delete_message(self, message):
-        """
-        Elimina un mensaje, y además registra los IDs de los últimos 20 mensajes guardados
-        :param message: El mensaje a eliminar
-        """
-        self.deleted_messages.append(message.id)
-
-        try:
-            await super().delete_message(message)
-        except discord.Forbidden as e:
-            del self.deleted_messages[-1]
-            raise e
-
-        if len(self.deleted_messages) > 20:
-            del self.deleted_messages[0]
-
-    def connect_db(self):
-        """
-        Ejecuta la conexión a la base de datos
-        """
-        self.db = init_db()
-        log.info('Conectado correctamente a la base de datos mediante %s', self.db.__class__.__name__)
+        except KeyboardInterrupt:
+            self.loop.run_until_complete(self.close())
+            log.warning('Keyboard interrupt!')
+        finally:
+            self.loop.close()
 
     def load_config(self):
         """
-        Carga la configuración estática y de idioma
-        :return: Un valor booleano dependiente del éxito de la carga de los datos.
+        Loads static and language configuration
+        :return: A boolean depending on the operation's result.
         """
         try:
-            log.info('Cargando configuración...')
-            self.config.load(defaults.config)
+            log.info('Loading configuration...')
+            self.config = BotConfiguration.get_instance()
+            log.info('Loading language stuff...')
             self.lang = Language('lang', default=self.config['default_lang'], autoload=True)
-            log.info('Configuración cargada')
+            log.info('Loaded languages: %s, default: %s', list(self.lang.lib.keys()), self.config['default_lang'])
+            log.info('Configuration loaded')
             return True
         except Exception as ex:
             log.exception(ex)
             return False
 
-    def close(self):
-        asyncio.set_event_loop(asyncio.new_event_loop())
-        loop = asyncio.get_event_loop()
+    async def close(self):
+        """
+        Stops tasks, close connections and logout from Discord.
+        :return:
+        """
+        log.debug('Closing stuff...')
+        await super().close()
 
-        super().close()
-        loop.run_until_complete(self.http.close())
-        self.manager.cancel_tasks()
+        # Close everything http related
         self.manager.close_http()
 
+        # Stop tasks
+        self.manager.cancel_tasks()
 
-    """
-    ===== EVENT HANDLERS =====
-    """
+    async def send_modlog(self, guild: discord.Guild, message=None, embed: discord.Embed = None,
+                          locales=None, logtype=None):
+        """
+        Sends a message to the modlog channel of a guild, if modlog channel is set, and if the
+        logtype is enabled.
+        :param guild: The guild to send the modlog message.
+        :param message: The message content.
+        :param embed: An embed for the message.
+        :param locales: Locale variables for language messages.
+        :param logtype: The modlog type of the message. Guilds can disable individual modlog types.
+        """
+        config = GuildConfiguration.get_instance(guild)
+        chanid = config.get('join_send_channel')
+        if chanid == '':
+            return
+
+        if logtype and logtype in config.get_list('logtype_disabled'):
+            return
+
+        chan = self.get_channel(auto_int(chanid))
+        if chan is None:
+            log.debug('[modlog] Channel not found (svid %s chanid %s)', guild.id, chanid)
+            return
+
+        await self.send_message(chan, content=message, embed=embed, locales=locales)
+
+    def schedule(self, task, time=0, force=False):
+        """
+        Shorthand method: adds a task to the loop to be run every *time* seconds.
+        :param task: The task function
+        :param time: The time in seconds to repeat the task. If zero, the task will be called just once.
+        :param force: What to do if the task was already created. If True, the task is cancelled and created again.
+        """
+
+        return self.manager.schedule(task, time, force)
+
+    async def send_message(self, destination, content='', **kwargs):
+        """
+        Method that proxies all messages sent to Discord, to fire other calls
+        like event handlers, message filters and bot logging. Allows original method's parameters.
+        :param destination: Where to send the message, must be a discord.abc.Messageable compatible instance.
+        :param content: The content of the message to send.
+        :return: The message sent
+        """
+
+        kwargs['content'] = content
+        if not isinstance(destination, discord.abc.Messageable):
+            raise RuntimeError('destination must be a discord.abc.Messageable compatible instance')
+
+        # Call pre_send_message handlers, append destination
+        self.manager.dispatch_ref('pre_send_message', kwargs)
+
+        # Log the message
+        if isinstance(destination, discord.TextChannel):
+            destination_repr = '{}#{} (IDS {}#{})'.format(
+                destination.guild, str(destination), destination.id, destination.guild.id)
+        else:
+            destination_repr = str(destination)
+
+        msg = 'Sending message "{}" to {} '.format(kwargs['content'], destination_repr)
+        if isinstance(kwargs.get('embed', None), discord.Embed):
+            msg += ' (with embed: {})'.format(kwargs.get('embed').to_dict())
+        log.debug(msg)
+
+        # Send the actual message
+        if 'locales' in kwargs:
+            del kwargs['locales']
+        if 'event' in kwargs:
+            del kwargs['event']
+
+        return await destination.send(**kwargs)
+
+    async def delete_message(self, message, silent=False):
+        """
+        Deletes a message and registers the last 50 messages' IDs.
+        :param message: The message to delete
+        :param silent: Add the message to the no-log list
+        """
+        if not isinstance(message, discord.Message):
+            raise RuntimeError('message must be a discord.Message instance')
+
+        self.deleted_messages.append(message.id)
+        if silent:
+            self.deleted_messages_nolog.append(message.id)
+
+        try:
+            await message.delete()
+        except discord.Forbidden as e:
+            del self.deleted_messages[-1]
+            if silent:
+                del self.deleted_messages_nolog[-1]
+            raise e
+
+        if len(self.deleted_messages) > 50:
+            del self.deleted_messages[0]
+        if len(self.deleted_messages_nolog) > 50:
+            del self.deleted_messages_nolog[0]
+
+    # ------------------------
+    # | GUILD HELPER METHODS |
+    # ------------------------
+
+    def is_guild_owner(self, member: discord.Member):
+        """
+        Check if a guild member is an "owner" for the bot
+        :param member: The discord.Guild member.
+        :return: A boolean value depending if the member is an owner or not.
+        """
+        if not isinstance(member, discord.Member):
+            return False
+
+        # The server owner or a user with the Administrator permission is an owner to the bot.
+        if member.guild.owner == member or member.guild_permissions.administrator:
+            return True
+
+        # Check if the user has the owner role
+        cfg = GuildConfiguration.get_instance(member.guild)
+        owner_roles = cfg.get_list('owner_roles', '\n', [self.config['owner_role']])
+        for role in member.roles:
+            if str(role.id) in owner_roles \
+                    or role.name in owner_roles \
+                    or str(member.id) in owner_roles:
+                return True
+
+        return False
+
+    def get_prefix(self, destination=None):
+        """
+        Gets the prefix for a channel of destination. It would normally return a prefix for a guild
+        TextChannel, and return the default one for all the other destinations.
+        :param destination: The Guild or TextChannel of destination. Any other of these will return
+        the default prefix.
+        :return: The prefix for the destination.
+        """
+        if isinstance(destination, discord.TextChannel):
+            # If the destination is a TextChannel, use its Guild
+            destination = destination.guild
+        elif not isinstance(destination, discord.Guild):
+            # Anything not a TextChannel or Guild, sets the destination to None to get the default prefix.
+            destination = None
+
+        # Retrieve and return the prefix
+        cfg = GuildConfiguration.get_instance(destination)
+        return cfg.get('command_prefix', self.config['command_prefix'])
+
+    @property
+    def uptime(self):
+        return datetime.now() - self.start_time
+
+    # ------------------
+    # | EVENT HANDLERS |
+    # ------------------
+
+    async def on_ready(self):
+        """ This is executed once the bot has successfully connected to Discord. """
+
+        self.connect_delta = (datetime.now() - self.start_time).total_seconds()
+        log.info('Connected as "%s" (%s)', self.user.name, self.user.id)
+        log.info('It took %.3f seconds to connect.', self.connect_delta)
+        log.info('------')
+        await self.change_presence(activity=discord.Game(self.config['playing']))
+
+        self.initialized = True
+        self.manager.create_tasks()
+        await self.manager.dispatch('on_ready')
 
     async def on_message(self, message):
         await self.manager.dispatch('on_message', message=message)
@@ -191,23 +299,26 @@ class AlexisBot(discord.Client):
     async def on_member_update(self, before, after):
         await self.manager.dispatch('on_member_update', before=before, after=after)
 
+    async def on_user_update(self, before, after):
+        await self.manager.dispatch('on_user_update', before=before, after=after)
+
     async def on_message_delete(self, message):
         await self.manager.dispatch('on_message_delete', message=message)
 
     async def on_message_edit(self, before, after):
         await self.manager.dispatch('on_message_edit', before=before, after=after)
 
-    async def on_server_join(self, server):
-        await self.manager.dispatch('on_server_join', server=server)
+    async def on_guild_join(self, guild):
+        await self.manager.dispatch('on_guild_join', guild=guild)
 
-    async def on_server_remove(self, server):
-        await self.manager.dispatch('on_server_remove', server=server)
+    async def on_guild_remove(self, guild):
+        await self.manager.dispatch('on_guild_remove', guild=guild)
 
-    async def on_member_ban(self, member):
-        await self.manager.dispatch('on_member_ban', member=member)
+    async def on_member_ban(self, guild, user):
+        await self.manager.dispatch('on_member_ban', guild=guild, user=user)
 
-    async def on_member_unban(self, member):
-        await self.manager.dispatch('on_member_unban', member=member)
+    async def on_member_unban(self, guild, user):
+        await self.manager.dispatch('on_member_unban', guild=guild, user=user)
 
     async def on_typing(self, channel, user, when):
-        await self.manager.dispatch('on_server_remove', channel=channel, user=user, when=when)
+        await self.manager.dispatch('on_typing', channel=channel, user=user, when=when)

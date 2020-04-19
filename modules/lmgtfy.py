@@ -1,17 +1,19 @@
 from urllib.parse import urlencode
-from bot import Command
+from bot import Command, categories
 
 
 class LetMeGoogleThatForYou(Command):
     def __init__(self, bot):
         super().__init__(bot)
         self.name = 'lmgtfy'
-        self.aliases = ['google', 'comandoqueteayudaraabuscarloquenecesitasdeunaformamuyfacilydivertida']
-        self.help = 'Te ayuda a buscar algo en Google'
+        self.aliases = ['google']
+        self.help = '$[lmgtfy-help]'
+        self.format = '$[lmgtfy-format]'
+        self.category = categories.FUN
 
     async def handle(self, cmd):
         if len(cmd.args) < 1:
-            await cmd.answer('formato: $PX$NM <texto>')
+            await cmd.answer('$[format]: $[lmgtfy-format]')
             return
 
         url = 'https://lmgtfy.com/?' + urlencode({'q': cmd.text})

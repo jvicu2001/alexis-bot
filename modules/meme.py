@@ -1,54 +1,50 @@
 from io import BytesIO
-from os import path
 from PIL import Image, ImageFont, ImageDraw
-from bot import Command
-from bot.utils import pat_usertag
+from discord import File
 
-furl = 'https://raw.githubusercontent.com/caarlos0-graveyard/msfonts/master/fonts/impact.ttf'
+from bot import Command, categories
+from bot.regex import pat_usertag
+
+furl = 'https://github.com/sophilabs/macgifer/raw/master/static/font/impact.ttf'
 
 
 class Meme(Command):
     __author__ = 'makzk'
-    __version__ = '1.0.2'
+    __version__ = '1.0.3'
 
     def __init__(self, bot):
         super().__init__(bot)
         self.name = 'meme'
-        self.help = 'Genera un meme en base a la imagen de un usuario'
-        self.format = 'formatos:\n' \
-                      '```' \
-                      '$CMD <texto_abajo> (usará tu avatar)\n' \
-                      '$CMD [usuario] | <texto_abajo>\n' \
-                      '$CMD <usuario> | <texto_arriba> | <texto_abajo>\n' \
-                      '$CMD <@mención> [|] <texto_abajo>\n' \
-                      '$CMD <@mención> [|] <texto_arriba> | <texto_abajo>' \
-                      '```'
+        self.help = '$[memes-help]'
+        self.category = categories.IMAGES
+        self.format = '$[format]:```$[memes-format-1]\n$[memes-format-2]\n$[memes-format-3]\n' \
+                      '$[memes-format-4]\n$[memes-format-5]```'
         self.isize = 512
-        self.mpath = path.join(path.dirname(path.realpath(__file__)), 'impact.ttf')
+        self.mpath = None
         self.font = None
         self.font_smaller = None
 
     async def on_ready(self):
-        if not path.exists(self.mpath):
-            self.log.info('No se encontró la fuente Impact, descargando...')
-            try:
-                async with self.http.get(furl) as resp:
-                    self.log.info('Fuente Impact descargada')
-                    data = await resp.read()
-                    with open(self.mpath, 'wb') as f:
-                        f.write(data)
-                        f.close()
-                        self.log.info('Fuente Impact guardada')
-            except OSError as e:
-                self.log.error('No fue posible guardar el archivo')
-                self.log.exception(e)
+        self.mpath = await self.mgr.download('impact.ttf', furl)
+        if self.mpath is None:
+            self.log.warn('Could not retrieve the font')
+            return
 
-        self.font = ImageFont.truetype(self.mpath, size=int(self.isize/8))
-        self.font_smaller = ImageFont.truetype(self.mpath, size=int(self.isize/14))
+        try:
+            self.font = ImageFont.truetype(self.mpath, size=int(self.isize/8))
+            self.font_smaller = ImageFont.truetype(self.mpath, size=int(self.isize/14))
+        except OSError as e:
+            if str(e) == 'unknown file format':
+                self.log.warn('The cached or downloaded font is invalid. '
+                              'Try deleting "cache/impact.ttf" and running the bot again.')
 
     async def handle(self, cmd):
         if cmd.argc == 0:
             await cmd.answer(self.format)
+            return
+
+        if self.font is None:
+            await cmd.answer('$[memes-disabled]')
             return
 
         if pat_usertag.match(cmd.args[0]):
@@ -60,10 +56,10 @@ class Meme(Command):
             args = [f.strip() for f in cmd.no_tags().split('|')]
 
         if len(args) > 1:
-            user = await cmd.get_user(args[0].strip())
+            user = cmd.get_member_or_author(args[0].strip())
 
             if user is None:
-                await cmd.answer('usuario no encontrado')
+                await cmd.answer('$[user-not-found]')
                 return
             upper = args[1].upper() if len(args) > 2 else None
             lower = (args[2] if len(args) > 2 else args[1]).upper()
@@ -72,11 +68,9 @@ class Meme(Command):
             upper = None
             lower = args[0].upper()
 
-        avatar_url = user.avatar_url or user.default_avatar_url
         await cmd.typing()
-        async with self.http.get(avatar_url) as resp:
-            self.log.debug('Descargando avatar de usuario: %s', avatar_url)
-            avatar_data = await resp.read()
+        self.log.debug('Downloading user avatar: %s', str(user.avatar_url))
+        avatar_data = await user.avatar_url.read()
 
         avatar_data = Image.open(BytesIO(avatar_data)).resize((self.isize, self.isize), Image.ANTIALIAS)
         im = Image.new('RGBA', (self.isize, self.isize))
@@ -90,8 +84,8 @@ class Meme(Command):
         im.save(temp, format='PNG')
         temp = BytesIO(temp.getvalue())  # eliminar bytes nulos
 
-        self.log.debug('Meme generado!')
-        await self.bot.send_file(cmd.channel, temp, filename='meme.png', content=cmd.author_name)
+        self.log.debug('Meme generated!')
+        await cmd.channel.send(cmd.author_name, file=File(temp, filename='meme.png'))
 
     def meme_draw(self, im, text, upper=True):
         draw = ImageDraw.Draw(im)

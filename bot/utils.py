@@ -3,22 +3,9 @@ import time
 
 import discord
 import re
-from os import path
 from discord import Embed, Colour
 
-from bot.libs.configuration import ServerConfiguration
-
-
-pat_tag = re.compile('^<(@!?|#|a?:([a-zA-Z0-9\-_]+):)(\d{10,19})>$')
-pat_usertag = re.compile('^<@!?(\d{10,19})>$')
-pat_channel = re.compile('^<#(\d{10,19})>$')
-pat_subreddit = re.compile('^[a-zA-Z0-9_\-]{2,25}$')
-pat_emoji = re.compile('<a?(:([a-zA-Z0-9\-_]+):)([0-9]+)>')
-pat_normal_emoji = re.compile('^:[a-zA-Z\-_]+:$')
-pat_snowflake = re.compile('^\d{10,19}$')
-pat_colour = re.compile('^#?[0-9a-fA-F]{6}$')
-pat_delta = re.compile('^([0-9]+[smhd])+$')
-pat_delta_each = re.compile('([0-9]+[smhd])+')
+from bot.regex import pat_tag, pat_usertag, pat_channel, pat_emoji, pat_colour, pat_delta_each, pat_invite
 
 colour_list = ['default', 'teal', 'dark_teal', 'green', 'dark_green', 'blue', 'dark_blue', 'purple',
                'dark_purple', 'gold', 'dark_gold', 'orange', 'dark_orange', 'red', 'dark_red',
@@ -41,81 +28,61 @@ def is_float(val):
         return False
 
 
-def is_owner(bot, member, server):
-    if server is None or not isinstance(member, discord.Member):
-        return False
+def auto_int(val):
+    if isinstance(val, int):
+        return val
 
-    if member.server_permissions.administrator:
-        return True
-
-    cfg = ServerConfiguration(bot.sv_config, server.id)
-
-    owner_roles = cfg.get('owner_roles', bot.config['owner_role'])
-    if owner_roles == '':
-        owner_roles = []
-    else:
-        owner_roles = owner_roles.split('\n')
-
-    for role in member.roles:
-        if role.id in owner_roles \
-                or role.name in owner_roles \
-                or member.id in owner_roles:
-            return True
-
-    return False
+    try:
+        return int(val)
+    except ValueError:
+        return val
 
 
-def get_server_role(server, role):
+def compare_ids(val1, val2):
+    return auto_int(val1) == auto_int(val2)
+
+
+def get_guild_role(guild: discord.Guild, role, case_sensitive=True):
     """
-    Obtiene la instancia de un rol de un servidor
-    :param server: La instancia de servidor en la que se buscará
-    :param role: El nombre o ID del rol
-    :return: La instancia del rol, o None si no ha sido encontrado
+    Creates an instance of a guild role
+    :param guild: The discord.Guild instance in where the lookup will be made
+    :param role: The name or ID of the role
+    :param case_sensitive: Implies if the lookup will be case sensitive
+    :return: The role instance, or None if it was not found
     """
-    if not isinstance(server, discord.Server):
-        raise RuntimeError('"server" argument must be a discord.Server instance')
 
-    for role_ins in server.roles:
-        if role_ins.name == role or role_ins.id == role:
+    for role_ins in guild.roles:
+        if (not case_sensitive and role_ins.name.lower() == role.lower()) \
+                or role_ins.name == role \
+                or compare_ids(role_ins.id, role):
             return role_ins
 
     return None
 
 
-def member_has_role(member, role):
-    """
-    Verifica si un miembro dado tiene un rol
-    :param member: El miembro de un servidor
-    :param role: El nombre, ID del rol o el rol
-    :return:
-    """
-    if not isinstance(member, discord.Member):
-        raise RuntimeError('"member" argument must be a discord.Member instance')
-
-    for member_role in member.roles:
-        if isinstance(role, discord.Role) and member_role == role:
-            return True
-        if member_role.name == role or member_role.id == role:
-            return True
-
-    return False
-
-
-def img_embed(url, title=''):
+def img_embed(url, title='', description='', footer=''):
     embed = Embed()
     embed.set_image(url=url)
-    if title != '':
+
+    if title:
         embed.title = title
+
+    if description:
+        embed.description = description
+
+    if footer:
+        embed.set_footer(text=footer)
+
     return embed
 
 
 def text_cut(text, limit, cutter='…'):
     """
-    Corta un texto y agrega un texto al final en caso de que el texto sea mayor que el tamaño límite
-    :param text: El texto a cortar
-    :param limit: El límite de texto
-    :param cutter: El texto que se colocará al final en caso de ser cortado
-    :return: El texto cortado, si corresponde, o el texto completo, si no supera el límite.
+    Text ellipsis
+    :param text: The text to be cutted
+    :param limit: The text limit (the ellipsis character(s) are counted in this limit)
+    :param cutter: The suffix to add at the end of the cutted text.
+    :return: The cutted text, or the full text if it's shorter than the given limit.
     """
     if len(text) > limit:
         return text[:limit-len(cutter)-1] + cutter
@@ -125,11 +92,11 @@ def text_cut(text, limit, cutter='…'):
 
 def split_list(listcont, limit, glue='\n'):
     """
-    Separa una lista de items en listas más pequeñas para poder ser enviada por partes en un mensaje
-    :param listcont: La lista completa de items
-    :param limit: El límite de carácteres
-    :param glue: El string que unirá cada elemento de la lista
-    :return: Una lista de listas separadas según los parámetros entregados
+    Splits a list of items in chunks to be sent in messages
+    :param listcont: The item list
+    :param limit: The character limit
+    :param glue: The string that will join every list item
+    :return: A list of strings with the items joined given the glue parameter
     """
     chunks = []
     chunk = []
@@ -147,19 +114,26 @@ def split_list(listcont, limit, glue='\n'):
 
 
 def parse_tag(text):
+    """
+    Creates a dict object with parameters, given a Discord tag (users, channels, custom emojis).
+    :param text: The tag text
+    :return: The dict object with items, all of them will have the 'type' property (possible values: channel,
+    emoji and user). Values for channel: id. Values for emoji: name, animated (bool), id. Values for user:
+    id, with_nick (bool).
+    """
     if not pat_tag.match(text):
         return None
 
     if pat_channel.match(text):
-        return {'type': 'channel', 'id': text[2:-1]}
+        return {'type': 'channel', 'id': int(text[2:-1])}
 
     emoji = pat_emoji.match(text)
     if emoji is not None:
-        return {'type': 'emoji', 'name': emoji.group(2), 'animated': text.startswith('<a'), 'id': emoji.group(3)}
+        return {'type': 'emoji', 'name': emoji.group(2), 'animated': text.startswith('<a'), 'id': int(emoji.group(3))}
 
     user = pat_usertag.match(text)
     if user is not None:
-        return {'type': 'user', 'id': user.group(0), 'with_nick': text.startswith('<@!')}
+        return {'type': 'user', 'id': int(user.group(1)), 'with_nick': text.startswith('<@!')}
     
     return None
 
@@ -173,26 +147,81 @@ def serialize_avail(avails):
 
 
 def deltatime_to_str(deltatime):
+    """
+    Creates a relative string from a deltatime object. For example, "1 day, 3 hours".
+    :param deltatime: The deltatime object.
+    :return: The generated string from the deltatime.
+    """
     result = []
     if deltatime.days > 0:
-        result.append(str(deltatime.days) + ' día{}'.format('' if deltatime.days == 1 else 's'))
+        result.append(str(deltatime.days) + ' $[day{}]'.format('' if deltatime.days == 1 else 's'))
     m, s = divmod(deltatime.seconds, 60)
     h, m = divmod(m, 60)
 
     if h > 0:
-        result.append(str(h) + ' hora{}'.format('' if h == 1 else 's'))
+        result.append(str(h) + ' $[hour{}]'.format('' if h == 1 else 's'))
     if m > 0:
-        result.append(str(m) + ' minuto{}'.format('' if m == 1 else 's'))
+        result.append(str(m) + ' $[minute{}]'.format('' if m == 1 else 's'))
     if s > 0:
-        result.append(str(s) + ' segundo{}'.format('' if s == 1 else 's'))
+        result.append(str(s) + ' $[second{}]'.format('' if s == 1 else 's'))
 
     if len(result) == 0:
-        result = ['ahora']
+        result = ['$[now]']
 
     return ', '.join(result)
 
 
+def deltatime_to_str_short(deltatime):
+    """
+    Creates a relative string from a deltatime object. For example, "1d3h", for 1 day and 3 hours.
+    :param deltatime: The deltatime object.
+    :return: The generated string from the deltatime.
+    """
+    result = []
+    if deltatime.days > 0:
+        result.append(str(deltatime.days) + 'd')
+    m, s = divmod(deltatime.seconds, 60)
+    h, m = divmod(m, 60)
+
+    if h > 0:
+        result.append(str(h) + 'h')
+    if m > 0:
+        result.append(str(m) + 'm')
+    if s > 0:
+        result.append(str(s) + 's')
+
+    if len(result) == 0:
+        result = ['$[now]']
+
+    return ''.join(result)
+
+
+def deltatime_to_time(deltatime):
+    """
+    Creates a time string from a deltatime object. For example, "1d 3:30:01", for 1 day and 3 hours.
+    :param deltatime: The deltatime object.
+    :return: The generated string from the deltatime.
+    """
+    result = []
+    if deltatime.days > 0:
+        result.append(str(deltatime.days) + 'd ')
+    m, s = divmod(deltatime.seconds, 60)
+    h, m = divmod(m, 60)
+
+    result.append(str(h).zfill(2))
+    result.append(':' + str(m).zfill(2))
+    result.append(':' + str(s).zfill(2))
+
+    return ''.join(result)
+
+
 def timediff_parse(timediff):
+    """
+    Creates a deltatime from a deltatime_to_str_short format result. For example, "1d3h" creates a 1 day and 3 hours
+    deltatime object. Time items can be repeated and don't need to be in a specific order.
+    :param timediff: The timediff string.
+    :return: The resulting deltatime object.
+    """
     timediff = timediff.lower()
     ds = {'s': 0, 'm': 0, 'h': 0, 'd': 0}
     times = pat_delta_each.findall(timediff)
@@ -207,6 +236,12 @@ def timediff_parse(timediff):
 
 
 def format_date(date):
+    """
+    Creates a date string given a date object, in the format YYYY-mm-dd HH:MM:SS [offset].
+    The offset will normally be in the -NNNN format (e.g., -0300).
+    :param date: The date object
+    :return: The generated string for the date object.
+    """
     offset = time.strftime('%Z')
     if len(offset) > 5:
         offset = time.strftime('%z')
@@ -214,15 +249,15 @@ def format_date(date):
     return date.strftime('%Y-%m-%d %H:%M:%S ') + offset
 
 
-def destination_repr(destination):
-    if getattr(destination, 'server', None) is None:
-        return '{} (ID: {})'.format(str(destination), destination.id)
-    else:
-        return '{}#{} (IDS {}#{})'.format(destination.server, str(destination), destination.id,
-                                          destination.server.id)
-
-
 def replace_everywhere(content, search, replace=None):
+    """
+    Replaces a string everywhere in a string or a discord.Embed instance (i.e., title, description, fields, footer)
+    :param content: The string or discord.Embed instance. If none of them, it will be str()'d.
+    :param search: The string to search.
+    :param replace: The string to replace matches.
+    :return: If a discord.Embed instance is given, it will modify its attributes, so it's not necessary to recover this
+    method's result. In any case, it will return the modified content parameter.
+    """
     if isinstance(search, dict):
         for k, v in search.items():
             content = replace_everywhere(content, k, str(v))
@@ -250,11 +285,12 @@ def replace_everywhere(content, search, replace=None):
     return content
 
 
-def get_bot_root():
-    return path.abspath(path.join(path.dirname(__file__), '..'))
-
-
 def get_colour(value):
+    """
+    Creates a discord.Colour instance given a colour string.
+    :param value: A #RRGGBB string colour or a discord.Colour.embed_colour name.
+    :return: A discord.Colour instance.
+    """
     if re.match(pat_colour, value):
         if value.startswith("#"):
             value = value[1:]
@@ -268,6 +304,13 @@ def get_colour(value):
 
 
 def str_to_embed(txt):
+    """
+    Given a string in a certain format, creates a discord.Embed instance.
+    :param (str) txt: The string in the format: `title | description | image_url | embed_colour`.
+    To omit a parameter, add another pipe, or don't append it. For example, `title | | image_url`.
+    At least the title, description or the image url must be passed.
+    :return: A discord.Embed instance.
+    """
     if txt == '':
         raise RuntimeError('Invalid text to create an embed')
 
@@ -294,15 +337,16 @@ def str_to_embed(txt):
     return embed
 
 
-def get_prefix(bot, serverid=None):
-    if serverid is None:
-        return bot.config['command_prefix']
-    else:
-        svconfig = ServerConfiguration(bot.sv_config, serverid)
-        return svconfig.get('command_prefix', bot.config['command_prefix'])
-
-
 def no_tags(txt, bot=None, users=True, channels=True, emojis=True):
+    """
+    Removes all the tags from a string, and replaces them with a verbose string that doesn't trigger tags.
+    :param txt: The string to format.
+    :param bot: The bot instance. If none, it won't be able to get server member nicks.
+    :param users: A boolean to determine if users will be processed. Only the user ID will be left.
+    :param channels: A boolean to determine if channels will be processed. Only the channel ID will be left.
+    :param emojis: A boolean to determine if emojis will be processed. Only the emoji name will be left.
+    :return: The formatted string.
+    """
     if isinstance(txt, discord.Message):
         txt = txt.content
 
@@ -323,3 +367,54 @@ def no_tags(txt, bot=None, users=True, channels=True, emojis=True):
             txt = txt.replace(m.group(0), m.group(1))
 
     return txt
+
+
+def invite_filter(text):
+    """
+    Filters any Discord invitation link found on a string
+    :param text: The text to filter
+    :return: The filtered text
+    """
+    for match in pat_invite.finditer(text):
+        text = text.replace(match.group(0), '$[invite-filtered]')
+
+    return text
+
+
+def md_filter(text):
+    """
+    Filters Markown syntax with backslashes
+    :param text:
+    :return:
+    """
+    replacements = ['||', '*', '_']
+
+    if text is not None:
+        for o in replacements:
+            text = text.replace(o, '\\' + o)
+
+    return text
+
+
+def message_link(message):
+    return 'https://discordapp.com/channels/{}/{}/{}'.format(
+        message.guild.id if message.guild else '@me',
+        message.channel.id,
+        message.id
+    )
+
+
+def lazy_property(fn):
+    """
+    Decorator that makes a property lazy-evaluated.
+    Retrieved from: https://stevenloria.com/lazy-properties/ (2019-05-05)
+    """
+    attr_name = '_lazy_' + fn.__name__
+
+    @property
+    def _lazy_property(self):
+        if not hasattr(self, attr_name):
+            setattr(self, attr_name, fn(self))
+        return getattr(self, attr_name)
+
+    return _lazy_property

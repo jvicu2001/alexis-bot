@@ -1,13 +1,15 @@
 # Application
 
 config.yml
-config.py
 /config/
+/cache/
+database.db.bkp
 database.db
+db.sqlite3
 logs/
 data.json
 external_modules/
-modules/impact.ttf
+!external_modules/dir.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

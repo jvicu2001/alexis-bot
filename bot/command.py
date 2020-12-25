@@ -4,7 +4,7 @@ import discord
 
 from bot.utils import lazy_property
 from . import SingleLanguage
-from .guild_configuration import GuildConfiguration
+from bot.lib.guild_configuration import GuildConfiguration
 from .logger import new_logger
 from . import categories
 
@@ -12,6 +12,7 @@ from . import categories
 class Command:
     __author__ = 'makzk'
     __version__ = '0.0.0'
+    system = False
     db_models = []
 
     def __init__(self, bot):
@@ -56,12 +57,12 @@ class Command:
 
         if isinstance(guild, discord.Guild):
             guildcfg = GuildConfiguration.get_instance(guild)
-            lang_code = guildcfg.get('lang', self.bot.config['default_lang'], create=False)
+            lang_code = guildcfg.get('lang', self.bot.config['default_lang'])
 
             # Use channel language if the argument has been passed
             if isinstance(channel, discord.TextChannel):
                 chanid = channel if not isinstance(channel, discord.TextChannel) else str(channel.id)
-                lang_code = guildcfg.get('lang#' + chanid, lang_code, create=False)
+                lang_code = guildcfg.get('lang#' + chanid, lang_code)
 
         return SingleLanguage(self.bot.lang, lang_code)
 

@@ -7,6 +7,8 @@ from discord import Embed, Colour
 from bot import Command, categories, BaseModel
 from bot.utils import is_int, get_colour, format_date, colour_list
 
+pat_macro_name = re.compile(r'^[\w\-.,$%&¿?¡!+]{3,50}')
+
 
 class EmbedMacro(BaseModel):
     name = peewee.TextField()
@@ -52,8 +54,8 @@ class MacroSet(Command):
             await cmd.answer('$[macros-err-cmd-name]')
             return
 
-        if len(name) > 100:
-            await cmd.answer('$[macros-err-name-length]')
+        if not pat_macro_name.match(name):
+            await cmd.answer('$[macros-err-name]')
             return
 
         if len(subargs) == 1 and subargs[0] != '':
@@ -230,11 +232,13 @@ class MacroList(Command):
                 EmbedMacro.server << [cmd.message.guild.id, 'global'])
 
         for item in items:
-            if re.match(self.rx_mention, item.name):
+            if item.name == '@everyone' or item.name == '@here':
+                name = '@({})'.format(item.name[1:])
+            elif re.match(self.rx_mention, item.name):
                 name = item.name.replace('!', '')
                 member_id = name[2:-1]
                 member = cmd.member_by_id(member_id)
-                name = '*\\@{}*'.format('<@{}>'.format(member_id) if member is None else member.display_name)
+                name = '*\\@{}*'.format(member.display_name if member else member_id)
             else:
                 name = item.name
 
@@ -264,18 +268,14 @@ class MacroList(Command):
 class MacroUse(Command):
     def __init__(self, bot):
         super().__init__(bot)
-        self.swhandler = ['$PX ', '$PX', '¡']
+        self.swhandler = ['$PX', '¡']
         self.swhandler_break = True
 
     async def handle(self, cmd):
-        # Update the last user who used the macro
-        if self.bot.last_author is None or not cmd.self:
-            self.bot.last_author = cmd.author.id
-
         # Get macro arguments
         pfx = self.bot.config['command_prefix']
         if cmd.message.content.startswith(pfx + ' '):
-            macro_name = cmd.args[0]
+            macro_name = cmd.message.content.split(' ')[1]
             macro_args = (' '.join(cmd.args[1:])).split('|')
         else:
             args = cmd.message.content[1:].split(' ')

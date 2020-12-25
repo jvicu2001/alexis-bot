@@ -1,19 +1,17 @@
 import asyncio
-import glob
+import importlib
 import inspect
-import itertools
-import os
-import sys
-import traceback
-from os import path
 
 import aiohttp
 
-from bot import CommandEvent, BotMentionEvent, MessageEvent, BaseModel
 from bot.logger import new_logger
 from .command import Command
-from .database import ServerConfig
 
+import modules as bot_modules
+from bot import modules as sys_modules
+from .lib.common import is_pm
+
+modules = ['modules.' + x for x in bot_modules.__all__] + ['bot.modules.' + x for x in sys_modules.__all__]
 log = new_logger('Manager')
 
 
@@ -34,7 +32,7 @@ class Manager:
     def load_instances(self):
         """Loads instances for the command classes loaded"""
         self.cmd_instances = []
-        for c in Manager.get_mods(self.bot.config.get('ext_modpath', '')):
+        for c in Manager.get_mods():
             self.cmd_instances.append(self.load_module(c))
         self.sort_instances()
 
@@ -133,10 +131,10 @@ class Manager:
             # Scheduled (repetitive) tasks
             if isinstance(instance.schedule, list):
                 for (task, seconds) in instance.schedule:
-                    self.bot.schedule(task, seconds)
+                    self.schedule(task, seconds)
             elif isinstance(instance.schedule, tuple):
                 task, seconds = instance.schedule
-                self.bot.schedule(task, seconds)
+                self.schedule(task, seconds)
 
     async def run_task(self, task, time=0):
         """
@@ -200,24 +198,21 @@ class Manager:
         if not self.bot.initialized:
             return
 
-        event = None
-        if event_name == 'on_message':
-            message = kwargs.get('message')
-            if CommandEvent.is_command(message, self.bot):
-                event = CommandEvent(message, self.bot)
-            elif self.bot.user.mentioned_in(message) and message.author != self.bot.user:
-                event = BotMentionEvent(message, self.bot)
-            else:
-                event = MessageEvent(message, self.bot)
+        message = kwargs.get('message', None)
 
         for x in self.get_handlers('pre_' + event_name):
-            y = await x(event=event, **kwargs)
+            y = await x(**kwargs)
 
             if y is not None and isinstance(y, bool) and not y:
                 return
 
         if event_name == 'on_message':
-            await self.handle_message(kwargs.get('message'), event)
+            # Log PMs
+            if is_pm(message) and message.content != '':
+                if message.author.id == self.bot.user.id:
+                    log.info('[PM] (-> %s): %s', message.channel.recipient, message.content)
+                else:
+                    log.info('[PM] (<- %s): %s', message.author, message.content)
 
         for z in self.get_handlers(event_name):
             await z(**kwargs)
@@ -242,65 +237,11 @@ class Manager:
         for z in self.get_handlers(name):
             z(kwargs)
 
-    async def handle_message(self, message, event):
-        if not self.bot.initialized:
-            return
-
-        # Log PMs
-        if event.is_pm and message.content != '':
-            if event.self:
-                log.info('[PM] (-> %s): %s', message.channel.recipient, event.text)
-            else:
-                log.info('[PM] (<- %s): %s', event.author, event.text)
-
-        # Command handler
-        try:
-            # Valid command
-            if isinstance(event, (CommandEvent, BotMentionEvent)):
-                if isinstance(event, CommandEvent):
-                    # Update ID of the last one who used a command (omitting the bot)
-                    if not event.self:
-                        self.bot.last_author = message.author.id
-                    log.debug('[command] %s: %s', event.author, str(event))
-
-                try:
-                    await event.handle()
-                except Exception as e:
-                    if self.bot.config['debug']:
-                        await event.answer('$[error-debug]\n```{}```'.format(traceback.format_exc()))
-                    else:
-                        await event.answer('$[error-msg]\n```{}```'.format(str(e)))
-                    log.exception(e)
-
-            # 'startswith' handlers
-            for swtext in self.swhandlers.keys():
-                swtextrep = swtext.replace('$PX', event.prefix)
-                if message.content.startswith(swtextrep):
-                    swhandler = self.swhandlers[swtext]
-                    if swhandler.bot_owner_only and not event.bot_owner:
-                        continue
-                    if swhandler.owner_only and not (event.owner or event.bot_owner):
-                        continue
-                    if not swhandler.allow_pm and event.is_pm:
-                        continue
-
-                    await swhandler.handle(event)
-                    if swhandler.swhandler_break:
-                        break
-
-        except Exception as e:
-            log.exception(e)
-
     def has_cmd(self, name):
         return name in self.cmds
 
     def get_cmd(self, name):
         return None if not self.has_cmd(name) else self.cmds[name]
-
-    def get_mod_names(self):
-        names = [i.__class__.__name__ for i in self.cmd_instances]
-        names.sort()
-        return names
 
     def get_mod(self, name):
         for i in self.cmd_instances:
@@ -320,7 +261,7 @@ class Manager:
         return None
 
     async def activate_mod(self, name):
-        classes = Manager.get_mods(self.bot.config.get('ext_modpath', ''))
+        classes = Manager.get_mods()
         for cls in classes:
             if cls.__name__ == name:
                 log.debug('Loading "%s" module...', name)
@@ -357,44 +298,6 @@ class Manager:
         await self.bot.http.close()
         log.debug('HTTP sessions closed.')
 
-    async def download(self, filename, url, filesize=None):
-        basedir = path.abspath(path.join(path.dirname(path.realpath(__file__)), '..', 'cache'))
-        if not path.exists(basedir):
-            try:
-                os.mkdir(basedir)
-            except Exception as e:
-                log.error('Could not create cache directory')
-                log.exception(e)
-                return None
-
-        filepath = path.join(basedir, filename)
-        if path.exists(filepath):
-            if filesize is None:
-                return filepath
-
-            fs = os.stat(filepath)
-            if fs.st_size == filesize:
-                return filepath
-
-        try:
-            log.debug('Downloading %s from %s', filename, url)
-            async with self.http.get(url) as r:
-                log.info('File %s downloaded', filename)
-                data = await r.read()
-                try:
-                    with open(filepath, 'wb') as f:
-                        f.write(data)
-                        log.info('File %s stored to %s', filename, filepath)
-                        return filepath
-                except OSError as e:
-                    log.error('Could not store %s file', filename)
-                    log.exception(e)
-                    return None
-        except Exception as e:
-            log.error('Could not download the %s file', filename)
-            log.exception(e)
-            return None
-
     def __getitem__(self, item):
         return self.get_cmd(item)
 
@@ -402,85 +305,19 @@ class Manager:
         return self.has_cmd(item)
 
     @staticmethod
-    def get_mods(ext_path=''):
-        """
-        Loads available modules
-        :param ext_path: An external modules folder
-        :return: An instances list of command modules
-        """
-        bot_root = Manager.get_bot_root()
+    def get_mods():
         classes = []
-
-        # System modules
-        mods_path = path.join(bot_root, 'bot', 'modules')
-        _all = ['bot.modules.' + f for f in Manager.get_mod_files(mods_path)]
-        n_internal = len(_all)
-        log.debug('Loaded %i internal modules', n_internal)
-
-        # Included modules
-        mods_path = path.join(bot_root, 'modules')
-        _all += ['modules.' + f for f in Manager.get_mod_files(mods_path)]
-        log.debug('Loaded %i included modules', (len(_all)-n_internal))
-
-        # External (not from repo) modules
-        local_ext = path.join(bot_root, 'external_modules')
-        if path.isdir(local_ext):
-            _all += ['external_modules.' + f for f in Manager.get_mod_files(local_ext)]
-
-        # List external modules
-        if ext_path != '' and path.isdir(ext_path):
-            ext_mods = Manager.get_mod_files(ext_path)
-            sys.path.append(ext_path)
-            _all += ext_mods
-
-        # Load all modules
-        for imod in _all:
+        for imod in modules:
             try:
-                mod = __import__(imod, fromlist=[''])
+                members = inspect.getmembers(importlib.import_module(imod))
+                for name, clz in members:
+                    if name == 'Command' or not inspect.isclass(clz) or not issubclass(clz, Command):
+                        continue
+                    if imod.startswith('bot.'):
+                        clz.system = True
+                    classes.append(clz)
             except ImportError as e:
                 log.error('Could not load a module')
                 log.exception(e)
                 continue
-
-            # Instantiate loaded modules
-            for name, obj in inspect.getmembers(mod):
-                if obj in classes:
-                    continue
-
-                if inspect.isclass(obj) and name != 'Command' and issubclass(obj, Command):
-                    classes.append(obj)
-
-        return classes
-
-    @staticmethod
-    def get_mod_files(fpath):
-        """
-        Loads a script files list
-        :param fpath: The directory to scan
-        :return: The list of script paths, as a module name
-        """
-        result = []
-        mod_files = glob.iglob(fpath + "/**/*.py", recursive=True)
-
-        for mod_file in mod_files:
-            if not path.isfile(mod_file) or not mod_file.endswith('.py') or mod_file.endswith('__init__.py'):
-                continue
-            result.append(mod_file.replace(fpath + path.sep, '')[:-3].replace(path.sep, '.'))
-
-        return result
-
-    @classmethod
-    def get_all_models(cls):
-        """
-        Generates a list of models retrieved from all command modules.
-        :return: That thing I said above.
-        """
-        return [item for sublist in [kls.db_models for kls in cls.get_mods()] for item in sublist] + [ServerConfig]
-
-    @staticmethod
-    def get_bot_root():
-        """
-        Generates the absolute bot path in the system.
-        :return: A string containing the absolute bot path in the system.
-        """
-        return path.abspath(path.join(path.dirname(__file__), '..'))
+        return set(classes)

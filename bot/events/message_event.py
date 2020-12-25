@@ -2,8 +2,8 @@ import discord
 
 from discord import Embed
 
-from bot.guild_configuration import GuildConfiguration
-from bot.libs.language import SingleLanguage
+from bot.lib.guild_configuration import GuildConfiguration
+from bot.lib.language import SingleLanguage
 from bot.utils import no_tags, auto_int
 from bot.regex import pat_usertag, pat_channel, pat_snowflake
 
@@ -15,59 +15,53 @@ class MessageEvent:
 
         self.bot = bot
         self.message = message
-        self.channel = message.channel
-        self.author = message.author
-        self.author_name = message.author.display_name
-        self.is_pm = isinstance(message.channel, discord.DMChannel)
-        self.self = message.author.id == bot.user.id
         self.text = message.content
-        self.bot_owner = message.author.id in bot.config['bot_owners']
 
-        self.guild = None if self.is_pm else message.guild
-        self.config = GuildConfiguration.get_instance(self.guild)
+        self._config = None
         self._lang = None
 
-    async def answer(self, content='', to_author=False, withname=True, **kwargs):
+    async def answer(self, content='', *, to_author=False, withname=True, as_embed=False, title=None, colour=None,
+                     delete_trigger=False, **kwargs):
         """
         Sends a message where the event was created
         :param content: The message content. If it's a discord.Embed, then it's used as the embed parameter.
         :param to_author: If set to True, it's will be sent to the author instead of the event's channel.
         :param withname: Sets if the message will contain the author's name as prefix.
+        :param as_embed: Send message as an embed. With this, if the content is an embed, it will be ignored.
+        :param title: If an embed is sent, set it's title.
+        :param colour: If an embed is sent, set it's colour.
+        :param delete_trigger: Attempt to delete the message that generated the event.
         :param kwargs: Additional parameters to pass to send_message method.
         """
-        if isinstance(content, Embed):
-            kwargs['embed'] = content
-            content = ''
-
-        if 'locales' not in kwargs:
-            kwargs['locales'] = {}
-
-        kwargs['event'] = self
-
-        if withname:
-            if content != '':
-                content = ', ' + content
-            content = self.author_name + content
-
-        dest = self.message.author if to_author else self.message.channel
-        return await self.bot.send_message(dest, content, **kwargs)
-
-    async def answer_embed(self, msg, title=None, *, delete_trigger=False, withname=True, **kwargs):
         if delete_trigger:
             try:
                 await self.bot.delete_message(self.message, silent=True)
             except discord.Forbidden:
                 pass
 
-        if not isinstance(msg, Embed):
-            msg = Embed(description=msg)
-            if title is not None:
-                msg.title = title
+        if as_embed and not isinstance(content, Embed):
+            content = Embed(description=content)
+            content.title = title
 
-        if withname:
-            msg.set_footer(text=self.lang.format('$[answer-for]', locales={'author': self.author_name}))
+        if isinstance(content, Embed):
+            if colour:
+                content.colour = colour
+            if withname:
+                content.set_footer(
+                    text=self.lang.format('$[answer-for]', locales={'author': self.author_name}),
+                    icon_url=self.author.avatar_url_as(format='webp', size=32)
+                )
+            kwargs['embed'] = content
+            content = ''
+        else:
+            if withname:
+                if content != '':
+                    content = ', ' + content
+                content = self.author_name + content
 
-        await self.answer(embed=msg, withname=False, **kwargs)
+        kwargs['event'] = kwargs.get('event', self)
+        dest = self.message.author if to_author else self.message.channel
+        return await self.bot.send_message(dest, content, **kwargs)
 
     async def typing(self):
         """
@@ -116,9 +110,9 @@ class MessageEvent:
 
         # Use the methods according to the variable type
         if isinstance(named_or_id, int):
-            return self.guild.get_member(named_or_id)
+            return self.message.guild.get_member(named_or_id)
         else:
-            return self.guild.get_member_named(named_or_id)
+            return self.message.guild.get_member_named(named_or_id)
 
     def get_member_or_author(self, named_or_id=None):
         """
@@ -142,7 +136,7 @@ class MessageEvent:
         if pat_snowflake.match(channel):
             return guild.get_channel(channel)
         elif pat_channel.match(channel):
-            return guild.get_channel(channel[2:-1])
+            return guild.get_channel(int(channel[2:-1]))
         else:
             if channel.startswith('#'):
                 channel = channel[1:]
@@ -157,11 +151,61 @@ class MessageEvent:
         return self.lang.get(name, **kwargs)
 
     def is_owner(self, member: discord.Member):
-        return not self.is_pm and self.bot.is_guild_owner(member)
+        """
+        Check if a guild member is an "owner" for the bot
+        :param member: The discord.Guild member.
+        :return: A boolean value depending if the member is an owner or not.
+        """
+        if not isinstance(member, discord.Member):
+            return False
+
+        # The server owner or a user with the Administrator permission is an owner to the bot.
+        if member.guild.owner == member or member.guild_permissions.administrator:
+            return True
+
+        # Check if the user has the owner role
+        cfg = GuildConfiguration.get_instance(member.guild)
+        owner_roles = cfg.get_list('owner_roles', [self.bot.config['owner_role']])
+        for role in member.roles:
+            if str(role.id) in owner_roles \
+                    or role.name in owner_roles \
+                    or str(member.id) in owner_roles:
+                return True
+
+        return False
+
+    @property
+    def channel(self):
+        return self.message.channel
+
+    @property
+    def author(self):
+        return self.message.author
+
+    @property
+    def author_name(self):
+        return self.message.author.display_name
+
+    @property
+    def self(self):
+        return self.message.author.id == self.bot.user.id
+
+    @property
+    def bot_owner(self):
+        return any(x in self.bot.config['bot_owners'] for x in [str(self.message.author.id), self.message.author.id])
+
+    @property
+    def is_pm(self):
+        return isinstance(self.message.channel, discord.DMChannel)
+
+    @property
+    def guild(self):
+        return None if self.is_pm else self.message.guild
 
     @property
     def prefix(self):
-        return self.bot.get_prefix(self.message.channel)
+        """Retrieve and return the prefix"""
+        return self.bot.config.prefix if self.is_pm else self.config.prefix
 
     @property
     def owner(self):
@@ -174,13 +218,18 @@ class MessageEvent:
         return self.guild.me.permissions_in(self.channel)
 
     @property
+    def config(self):
+        if self._config is None:
+            self._config = GuildConfiguration.get_instance(self.guild)
+        return self._config
+
+    @property
     def lang(self):
         if self._lang is None:
             if self.guild is None:
                 self._lang = SingleLanguage(self.bot.lang, self.bot.config['default_lang'])
             else:
-                conf = GuildConfiguration.get_instance(self.guild)
-                lang_code = conf.get('lang', self.bot.config['default_lang'])
+                lang_code = self.config.get('lang', self.bot.config['default_lang'])
                 self._lang = SingleLanguage(self.bot.lang, lang_code)
 
         return self._lang

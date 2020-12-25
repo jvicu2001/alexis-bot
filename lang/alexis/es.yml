@@ -1,5 +1,6 @@
 user-not-found: Usuario no encontrado
 format: Formato
+cmd-usage: Uso del comando
 disallowed-via-pm: Este comando no puede ser utilizado via PM
 command-not-authorized: No puedes utilizar este comando
 'yes': si
@@ -29,3 +30,11 @@ error-msg: 'Ocurrió un error al ejecutar el comando'
 invite-text: 'Puedes agregarme a tu servidor mediante el siguiente enlace:'
 invite-filtered: '[invite eliminado]'
 usage: Formato
+reload-help: Recarga la configuración del bot desde los archivos.
+reload-err: Algo pasó al intentar recargar la configuración.
+reload-reloaded: Configuración recargada, {rel_mods} archivo(s) leído(s).
+shutdown-help: Mata el proceso del bot.
+shutdown-goodbye: Chao!
+config-status-help: Define uno o más estados personalizados en el bot.
+config-status-set: Estado personalizado definido para el bot.
+config-status-reset: Estados personalizados del bot reiniciados.

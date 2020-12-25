@@ -4,7 +4,7 @@ from bot.utils import get_guild_role, auto_int
 
 class OwnerRoles(Command):
     __author__ = 'makzk'
-    __version__ = '1.0.0'
+    __version__ = '1.1.0'
 
     def __init__(self, bot):
         super().__init__(bot)
@@ -16,17 +16,15 @@ class OwnerRoles(Command):
 
     async def handle(self, cmd):
         if cmd.argc < 1:
-            await cmd.answer('$[format]: $[owr-format]')
-            return
+            return await cmd.send_usage()
 
         await cmd.typing()
-        owner_roles = cmd.config.get('owner_roles', self.bot.config['owner_role'])
-        owner_roles = [owner_roles.split('\n'), []][int(owner_roles == '')]
+        default_role = self.bot.config['owner_role']
+        owner_roles = cmd.config.get_list('owner_roles', [default_role] if default_role else [])
 
         if cmd.args[0] in ['set', 'add', 'remove']:
             if cmd.argc < 2:
-                await cmd.answer('$[format]: $[owr-format]')
-                return
+                return await cmd.send_usage()
 
             cmd_role = ' '.join(cmd.args[1:])
             role = get_guild_role(cmd.message.guild, auto_int(cmd_role))
@@ -39,14 +37,14 @@ class OwnerRoles(Command):
                     await cmd.answer('$[owr-role-not-found]')
                     return
 
-                cmd.config.set('owner_roles', role.id)
+                cmd.config.set_list('owner_roles', [str(role.id)])
                 await cmd.answer('$[owr-set]', locales={'role_name': role.name})
             elif cmd.args[0] == 'add':
                 if str(role.id) in owner_roles:
                     await cmd.answer('$[owr-already-owner]')
                     return
 
-                cmd.config.set('owner_roles', '\n'.join(owner_roles + [str(role.id)]))
+                cmd.config.set_list('owner_roles', owner_roles + [str(role.id)])
                 await cmd.answer('$[owr-added]', locales={'role_name': role.name})
             elif cmd.args[0] == 'remove':
                 if str(role.id) not in owner_roles:
@@ -54,7 +52,7 @@ class OwnerRoles(Command):
                     return
 
                 owner_roles.remove(str(role.id))
-                cmd.config.set('owner_roles', '\n'.join(owner_roles))
+                cmd.config.set_list('owner_roles', owner_roles)
                 await cmd.answer('$[owr-removed]', locales={'role_name': role.name})
         elif cmd.args[0] == 'list':
             msg = '$[owr-title] '

@@ -1,6 +1,7 @@
 import discord
 
 from bot import Command, CommandEvent
+from bot.lib.guild_configuration import GuildConfiguration
 from bot.utils import replace_everywhere
 
 
@@ -18,8 +19,6 @@ class LangFilter(Command):
         await cmd.answer('$[config-resetlangs-done]')
 
     def pre_send_message(self, kwargs):
-        dest = kwargs.get('destination')
-
         lang = self.auto_lang(kwargs)
         if 'content' in kwargs:
             if kwargs['content'] is None:
@@ -48,7 +47,9 @@ class LangFilter(Command):
                 if kwargs.get('embed', None) is not None:
                     replace_everywhere(kwargs['embed'], '$NM', kwargs['event'].cmdname)
 
-        prefix = self.bot.get_prefix(getattr(dest, 'guild', None))
+        evt = kwargs.get('event')
+        guild = getattr(evt, 'guild', None)
+        prefix = GuildConfiguration.get_instance(guild).prefix
 
         if 'content' in kwargs and kwargs['content']:
             kwargs['content'] = kwargs['content'].replace('$PX', prefix)

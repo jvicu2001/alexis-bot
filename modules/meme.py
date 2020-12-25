@@ -4,6 +4,7 @@ from discord import File
 
 from bot import Command, categories
 from bot.regex import pat_usertag
+from bot.utils import download
 
 furl = 'https://github.com/sophilabs/macgifer/raw/master/static/font/impact.ttf'
 
@@ -25,7 +26,7 @@ class Meme(Command):
         self.font_smaller = None
 
     async def on_ready(self):
-        self.mpath = await self.mgr.download('impact.ttf', furl)
+        self.mpath = await download('impact.ttf', furl)
         if self.mpath is None:
             self.log.warn('Could not retrieve the font')
             return
@@ -47,26 +48,15 @@ class Meme(Command):
             await cmd.answer('$[memes-disabled]')
             return
 
-        if pat_usertag.match(cmd.args[0]):
-            args = [f.strip() for f in ' '.join(cmd.no_tags().split(' ')[1:]).split('|')]
-            if args[0] == '':
-                del args[0]
-            args.insert(0, cmd.args[0])
-        else:
-            args = [f.strip() for f in cmd.no_tags().split('|')]
+        user = cmd.author
+        if cmd.argc > 1 and pat_usertag.match(cmd.args[0]):
+            user = cmd.get_member_or_author(cmd.args.pop(0))
+            cmd.text = ' '.join(cmd.args)
+            cmd.argc -= 1
 
-        if len(args) > 1:
-            user = cmd.get_member_or_author(args[0].strip())
-
-            if user is None:
-                await cmd.answer('$[user-not-found]')
-                return
-            upper = args[1].upper() if len(args) > 2 else None
-            lower = (args[2] if len(args) > 2 else args[1]).upper()
-        else:
-            user = cmd.author
-            upper = None
-            lower = args[0].upper()
+        args = [x.strip() for x in cmd.no_tags().split('|')]
+        upper = '' if len(args) == 1 else args[0]
+        lower = args[0] if len(args) == 1 else args[1]
 
         await cmd.typing()
         self.log.debug('Downloading user avatar: %s', str(user.avatar_url))
@@ -77,7 +67,7 @@ class Meme(Command):
         im.paste(avatar_data, (0, 0))
 
         self.meme_draw(im, lower, upper=False)
-        if upper is not None:
+        if upper:
             self.meme_draw(im, upper)
 
         temp = BytesIO()

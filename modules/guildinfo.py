@@ -7,26 +7,26 @@ from bot.utils import format_date, deltatime_to_str, auto_int
 
 
 class GuildInfo(Command):
-    __version__ = '1.1.2'
+    __version__ = '1.1.3'
     __author__ = 'makzk'
 
     def __init__(self, bot):
         super().__init__(bot)
         self.name = 'guildinfo'
         self.aliases = ['guild', 'server', 'serverinfo']
+        self.format = '$[guildinfo-format]'
         self.category = categories.INFORMATION
 
     async def handle(self, cmd):
         if cmd.argc == 0:
             if cmd.is_pm:
-                await cmd.answer('$[format]: $[guildinfo-format]')
-                return
+                return await cmd.send_usage()
             else:
                 cmd.args.append(cmd.guild.id)
 
         guild = self.bot.get_guild(auto_int(cmd.args[0]))
         if guild is None:
-            for s in self.bot.servers:
+            for s in self.bot.guilds:
                 if s.name == cmd.args[0]:
                     guild = s
                     break

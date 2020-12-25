@@ -1,12 +1,26 @@
-animal-cats-help: Retrieves a random cat from random.cat
-animal-cats-title: "Here's your kitten \U0001F63A"
-animal-cats-error: 'Could not fetch a cat :('
-animal-dogs-help: Retrieves a random dog from dog.ceo
-animal-dogs-title: "Here's your doggo \U0001F415"
-animal-dogs-error: 'Could not fetch a dog :('
+animal-usage: >-
+  $PXanimal [type|help]. Use "help" to see which types are available.
+animal-usage-help: >-
+  $PXanimal [type|help], where "type" is one of: `{types}`.
+  If no type is passed, a random type is chosen.
+animal-cat-help: Retrieves a random cat from random.cat
+animal-cat-title: "Here's your kitten \U0001F63A"
+animal-cat-error: 'Could not fetch a cat :('
+animal-dog-help: Retrieves a random dog from dog.ceo
+animal-dog-title: "Here's your doggo \U0001F415"
+animal-dog-error: 'Could not fetch a dog :('
 animal-shiba-help: Retrieves a random shibe from shibe.online
 animal-shiba-title: "Here's your shibe \U0001F415"
-animals-shiba-error: 'Could not fetch a shibe :('
+animal-shiba-error: 'Could not fetch a shibe :('
 animal-fox-help: Retrieves a random fox from randomfox.ca
 animal-fox-title: "Here's your fox \U0001F98A"
 animal-fox-error: 'Could not fetch a fox :('
+animal-duck-help: Retrieves a random duck from random-d.uk
+animal-duck-title: "Here's your duck \U0001F986"
+animal-duck-error: 'Could not fetch a duck :('
+animal-bunny-help: Retrieves a random bunny from bunnies.io
+animal-bunny-title: "Here's your bunny \U0001F407"
+animal-bunny-error: 'Could not fetch a bunny :('
+animal-owl-help: Retrieves a random owl from pics.floofybot.moe
+animal-owl-title: "Here's your owl \U0001F989"
+animal-owl-error: 'Could not fetch a owl :('

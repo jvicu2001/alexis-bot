@@ -7,7 +7,7 @@ import emoji
 from discord import Emoji, Embed
 
 from bot import Command, categories, BaseModel
-from bot.guild_configuration import GuildConfiguration
+from bot.lib.guild_configuration import GuildConfiguration
 from bot.utils import auto_int, compare_ids
 
 
@@ -17,7 +17,7 @@ class Starboard(BaseModel):
     timestamp = peewee.DateTimeField(null=False)
 
 
-default_count = 10
+default_count = '10'
 cfg_starboard_emojis = 'starboard_emojis'
 cfg_starboard_channel = 'starboard_channel'
 cfg_starboard_tcount = 'starboard_trigger_count'
@@ -27,7 +27,7 @@ pat_emoji = re.compile(r'^<:[a-zA-Z0-9\-_]+:[0-9]+>$')
 
 class StarboardHook(Command):
     __author__ = 'makzk'
-    __version__ = '1.1.2'
+    __version__ = '1.1.3'
     db_models = [Starboard]
 
     def __init__(self, bot):
@@ -127,7 +127,7 @@ class StarboardHook(Command):
         # Load allowed reactions
         emojis = config.get(cfg_starboard_emojis)
         reaction_triggers = []
-        if emojis != '':
+        if emojis:
             reaction_filtered = emojis.split(' ')
             for react in reaction_filtered:
                 if pat_emoji.match(react):
@@ -142,7 +142,7 @@ class StarboardHook(Command):
         if starboard_chanid == '':
             return
 
-        ct_config = config.get(cfg_starboard_tcount, default_count)
+        ct_config = str(config.get(cfg_starboard_tcount, default_count))
         if not ct_config.isdigit():
             config.set(cfg_starboard_tcount, default_count)
             count_trigger = default_count
@@ -185,7 +185,8 @@ class StarboardHook(Command):
         if starboard_chan is None:
             if star_item is not None:
                 star_item.delete_instance()
-            self.log.debug('Channel ID %s not found for guild %s', starboard_chanid, user.guild)
+            self.log.debug('Channel ID %s not found for guild %s, starboard disabled.', starboard_chanid, user.guild)
+            config.set(cfg_starboard_channel, '')
             return
 
         footer_text = self.get_lang(message.guild, starboard_chan).get('starboard-reactions')

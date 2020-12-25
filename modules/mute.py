@@ -6,7 +6,7 @@ import discord
 import peewee
 
 from bot import Command, utils, categories, BaseModel
-from bot.guild_configuration import GuildConfiguration
+from bot.lib.guild_configuration import GuildConfiguration
 from bot.utils import auto_int
 
 
@@ -20,7 +20,7 @@ class MutedUser(BaseModel):
 
 
 class Mute(Command):
-    __version__ = '1.0.1'
+    __version__ = '1.0.3'
     __author__ = 'makzk'
 
     default_muted_role = 'Muted'
@@ -133,16 +133,24 @@ class Mute(Command):
 
     # Restore the mute role if user left and joined the guild again
     async def on_member_join(self, member):
+        mgr = GuildConfiguration.get_instance(member.guild)
         guild = member.guild
+        sv_role = mgr.get(Mute.cfg_muted_role, Mute.default_muted_role)
+
         if not guild.me.guild_permissions.manage_roles:
-            self.log.warning('Can\'t manage roles on the guild %s (%s)', str(guild), guild.id)
+            if sv_role and sv_role != Mute.default_muted_role:
+                self.log.warning('Can\'t manage roles on the guild %s (%s). Mute disabled.', str(guild), guild.id)
+                mgr.unset(Mute.cfg_muted_role)
             return
 
-        mgr = GuildConfiguration.get_instance(member.guild)
         sv_role = mgr.get(Mute.cfg_muted_role, Mute.default_muted_role)
+        if sv_role == '':
+            return
+
         role = utils.get_guild_role(guild, sv_role)
         if role is None:
-            self.log.warning('Role "%s" does not exist (guild: %s)', sv_role, guild)
+            self.log.warning('Role "%s" does not exist (guild: %s). Mute disabled.', sv_role, guild)
+            mgr.unset(Mute.cfg_muted_role)
             return
 
         try:
@@ -166,17 +174,23 @@ class Mute(Command):
                 self.log.debug('Guild ID %s not found', guildid)
                 continue
 
+            config = GuildConfiguration.get_instance(guild)
+
             if not guild.me.guild_permissions.manage_roles:
-                self.log.warning('I can\'t manage roles on guild: %s', guild)
+                self.log.warning('I can\'t manage roles on guild: %s. Mute disabled on this guild.', guild)
+                config.set(Mute.cfg_muted_role, '')
                 continue
 
-            config = GuildConfiguration.get_instance(guild)
             guild_role = config.get(Mute.cfg_muted_role, Mute.default_muted_role)
+            if guild_role == '':
+                return
+
             member = guild.get_member(mutedid)
             role = utils.get_guild_role(guild, guild_role)
 
             if role is None:
-                self.log.warning('Role "%s" does not exist (guild: %s)', guild_role, guild)
+                self.log.warning('Role "%s" does not exist (guild: %s). Mute disabled on this guild.', guild_role, guild)
+                config.uet(Mute.cfg_muted_role, '')
                 continue
             elif member is None:
                 # self.log.warning('Member ID %s not found (guild: %s)', mutedid, guild)

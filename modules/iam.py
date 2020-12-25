@@ -16,7 +16,7 @@ class IAm(Command):
         self.user_delay = 60
         self.category = categories.UTILITY
         self.default_config = {
-            'iam_roles_limit': 20
+            'iam_roles_limit': 50
         }
 
     async def handle(self, cmd):
@@ -180,6 +180,10 @@ class IAmRoles(Command):
 
             if role >= cmd.author.top_role:
                 await cmd.answer('$[iamroles-author-superior-role]')
+                return
+
+            if str(role.id) in cmd.config.get_list(cfg_roles):
+                await cmd.answer('$[iamroles-already-added]')
                 return
 
             cmd.config.add(cfg_roles, role.id)

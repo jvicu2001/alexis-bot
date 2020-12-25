@@ -1,12 +1,17 @@
 import datetime
 import time
+from os import path, mkdir, stat
 
+import aiohttp
 import discord
 import re
 from discord import Embed, Colour
 
+from bot import constants
+from bot.logger import new_logger
 from bot.regex import pat_tag, pat_usertag, pat_channel, pat_emoji, pat_colour, pat_delta_each, pat_invite
 
+log = new_logger('Utils')
 colour_list = ['default', 'teal', 'dark_teal', 'green', 'dark_green', 'blue', 'dark_blue', 'purple',
                'dark_purple', 'gold', 'dark_gold', 'orange', 'dark_orange', 'red', 'dark_red',
                'lighter_grey', 'dark_grey', 'light_grey', 'darker_grey']
@@ -34,7 +39,7 @@ def auto_int(val):
 
     try:
         return int(val)
-    except ValueError:
+    except (ValueError, TypeError):
         return val
 
 
@@ -267,11 +272,11 @@ def replace_everywhere(content, search, replace=None):
     if isinstance(content, str):
         content = content.replace(search, replace)
     if isinstance(content, Embed):
-        if content.title != Embed.Empty:
+        if content.title and content.title != Embed.Empty:
             content.title = content.title.replace(search, replace)
-        if content.description != Embed.Empty:
+        if content.description and content.description != Embed.Empty:
             content.description = content.description.replace(search, replace)
-        if content.footer.text != Embed.Empty:
+        if content.footer and content.footer.text and content.footer.text != Embed.Empty:
             content.set_footer(text=content.footer.text.replace(search, replace), icon_url=content.footer.icon_url)
 
         for idx, field in enumerate(content.fields):
@@ -351,11 +356,12 @@ def no_tags(txt, bot=None, users=True, channels=True, emojis=True):
         txt = txt.content
 
     if users:
+        txt = discord.utils.escape_mentions(txt)
         for m in pat_usertag.finditer(txt):
             if bot is None:
                 txt = txt.replace(m.group(0), m.group(1))
             else:
-                user = bot.get_user_info(m.group(1))
+                user = bot.get_user(int(m.group(1)))
                 txt.replace(m.group(0), user.display_name if user is not None else m.group(1))
 
     if channels:
@@ -381,27 +387,58 @@ def invite_filter(text):
     return text
 
 
-def md_filter(text):
-    """
-    Filters Markown syntax with backslashes
-    :param text:
-    :return:
-    """
-    replacements = ['||', '*', '_']
-
-    if text is not None:
-        for o in replacements:
-            text = text.replace(o, '\\' + o)
-
-    return text
-
-
 def message_link(message):
-    return 'https://discordapp.com/channels/{}/{}/{}'.format(
+    return '{}/channels/{}/{}/{}'.format(
+        constants.DISCORD_BASE,
         message.guild.id if message.guild else '@me',
         message.channel.id,
         message.id
     )
+
+
+def get_session():
+    headers = {'User-Agent': f'AlexisBot/{constants.BOT_VERSION} +https://alexisbot.mak.wtf'}
+    return aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=15))
+
+
+async def download(filename, url, filesize=None):
+    basedir = path.abspath(path.join(path.dirname(path.realpath(__file__)), '..', 'cache'))
+    if not path.exists(basedir):
+        try:
+            mkdir(basedir)
+        except Exception as e:
+            log.error('Could not create cache directory')
+            log.exception(e)
+            return None
+
+    filepath = path.join(basedir, filename)
+    if path.exists(filepath):
+        if filesize is None:
+            return filepath
+
+        fs = stat(filepath)
+        if fs.st_size == filesize:
+            return filepath
+
+    try:
+        log.debug('Downloading %s from %s', filename, url)
+        async with get_session() as s:
+            async with s.get(url) as r:
+                log.info('File %s downloaded', filename)
+                data = await r.read()
+                try:
+                    with open(filepath, 'wb') as f:
+                        f.write(data)
+                        log.info('File %s stored to %s', filename, filepath)
+                        return filepath
+                except OSError as e:
+                    log.error('Could not store %s file', filename)
+                    log.exception(e)
+                    return None
+    except Exception as e:
+        log.error('Could not download the %s file', filename)
+        log.exception(e)
+        return None
 
 
 def lazy_property(fn):

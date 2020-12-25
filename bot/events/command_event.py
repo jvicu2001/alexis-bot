@@ -4,6 +4,8 @@ import discord
 
 from bot.utils import serialize_avail, no_tags
 from .message_event import MessageEvent
+from ..lib.guild_configuration import GuildConfiguration
+from ..regex import pat_usertag
 
 
 class CommandEvent(MessageEvent):
@@ -21,12 +23,19 @@ class CommandEvent(MessageEvent):
         self.argc = len(self.args)
         self.text = ' '.join(self.args)
 
-    async def answer(self, content='', to_author=False, withname=False, **kwargs):
-        if 'locales' not in kwargs:
-            kwargs['locales'] = {}
-
+    async def answer(self, content='', withname=None, **kwargs):
+        # Set the event to this one
         kwargs['event'] = self
-        return await super().answer(content, to_author, withname, **kwargs)
+        if withname is None:
+            withname = isinstance(content, discord.Embed) or kwargs.get('as_embed', False)
+        return await super().answer(content, withname=withname, **kwargs)
+
+    async def send_usage(self, usage=None, **kwargs):
+        if usage is None:
+            usage = self.command.format
+
+        title = ':information_source: $[cmd-usage]: `$CMD`'
+        return await self.answer(usage, title=title, as_embed=True, colour=discord.Colour.light_gray(), **kwargs)
 
     def is_enabled(self):
         if self.is_pm:
@@ -39,7 +48,14 @@ class CommandEvent(MessageEvent):
         return enabled_db == '+'
 
     def no_tags(self, users=True, channels=True, emojis=True):
-        return no_tags(self.text, self.bot, users, channels, emojis)
+        text = self.text
+        if users:
+            for m in pat_usertag.finditer(text):
+                tag, uid = m.group(0), m.group(1)
+                user = self.guild.get_member(int(uid))
+                text = text.replace(m.group(0), user.display_name if user else '@unknown-user')
+
+        return no_tags(text, self.bot, False, channels, emojis)
 
     def __str__(self):
         return '[{} name="{}", channel="{}#{}", author="{}" text="{}"]'.format(
@@ -77,9 +93,17 @@ class CommandEvent(MessageEvent):
 
         return self.channel.guild.me.guild_permissions.manage_roles
 
+    @property
+    def command(self):
+        return self.bot.manager[self.cmdname]
+
     @staticmethod
     def is_command(message, bot):
-        prefix = bot.get_prefix(message.channel)
+        if isinstance(message.channel, discord.DMChannel):
+            prefix = bot.config.prefix
+        else:
+            prefix = GuildConfiguration.get_instance(message.channel.guild).prefix
+
         if message.content.startswith(prefix):
             cmdname = message.content[len(prefix):].split(' ')[0].split(':')[0]
             return cmdname in bot.manager
